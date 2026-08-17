@@ -1,11 +1,11 @@
 # ===================== 原始业务配置（只填写基础参数，不拼接路径） =====================
 # 业务名称
-BUSINESS_NAME = "踩踏绿化"
+BUSINESS_NAME = "安全帽"
 # 根目录
-ROOT_FOLDER = r"D:\data\踩踏绿化"
+ROOT_FOLDER = r"D:\data\盈盾图片\盈盾"
 
 # 请求参数
-QUESTION_TEXT = "是否有践踏绿化行为,回答是或者否"
+QUESTION_TEXT = "是否有未佩戴安全帽的行为,回答是或者否"
 API_URL = "http://123.206.99.114:5002/api/analyze/jobs"
 
 # 断言关键词配置
@@ -29,6 +29,6 @@ MAX_POLL_COUNT = 12
 POLL_WAIT_SECONDS = 10
 
 # 输出文件策略开关
-# True = 覆盖文件 api_result.txt
-# False = 新建带时分文件 api_result_HH_MM.txt
+# True = 覆盖文件 xxx.txt
+# False = 新建带时分文件 xxx_HH_MM.txt
 OVERWRITE_RESULT_FILE = False

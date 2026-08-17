@@ -5,7 +5,7 @@ import time
 import requests
 import json
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 # 导入配置
 from config import (
     BUSINESS_NAME, ROOT_FOLDER,
@@ -14,28 +14,75 @@ from config import (
     AUTH_HEADER_AUTHORIZATION, USER_AGENT, SUPPORT_EXT, OVERWRITE_RESULT_FILE
 )
 
+# 报告存放目录
+REPORTS_DIR = os.path.join(ROOT_FOLDER, "reports")
+# 自动创建reports目录，不存在就新建
+os.makedirs(REPORTS_DIR, exist_ok=True)
 
-def get_result_file_path() -> str:
-    """根据开关生成输出文件路径"""
+
+def get_group_result_file_path(group_prefix: str) -> str:
+    """根据分组前缀生成输出文件路径，输出到reports文件夹"""
     if OVERWRITE_RESULT_FILE:
-        filename = "api_result.txt"
+        filename = f"{group_prefix}.txt"
     else:
         now = datetime.now()
-        filename = f"api_result_{now.hour}_{now.minute}.txt"
-    return os.path.join(ROOT_FOLDER, filename)
+        filename = f"{group_prefix}_{now.hour}_{now.minute}.txt"
+    return os.path.join(REPORTS_DIR, filename)
 
 
-def find_all_image_files(root_dir: str):
-    """递归遍历根目录+所有子目录，收集全部图片"""
-    img_path_list = []
-    for dirpath, _, filenames in os.walk(root_dir):
-        for fname in filenames:
-            ext = os.path.splitext(fname)[1].lower()
+def scan_group_images() -> Dict[str, List[str]]:
+    """
+    按目录分组扫描图片
+    业务主目录：ROOT_FOLDER/BUSINESS_NAME  → r"D:\data\踩踏绿化\踩踏绿化"
+        - 直接在该目录下的图片 → group: 踩踏绿化
+        - dim子目录内图片 → group: 踩踏绿化_dim
+        - neg子目录内图片 → group: 踩踏绿化_neg
+    返回 {分组名:[图片全路径列表]}
+    """
+    business_dir = os.path.join(ROOT_FOLDER, BUSINESS_NAME)
+    groups: Dict[str, List[str]] = {
+        BUSINESS_NAME: [],
+        f"{BUSINESS_NAME}_dim": [],
+        f"{BUSINESS_NAME}_neg": [],
+    }
+    dim_dir = os.path.join(business_dir, "dim")
+    neg_dir = os.path.join(business_dir, "neg")
+
+    if not os.path.isdir(business_dir):
+        print(f"【严重警告】业务目录不存在：{business_dir}")
+        return groups
+
+    # 遍历业务目录下直接的图片文件
+    for entry in os.scandir(business_dir):
+        if entry.is_file():
+            ext = os.path.splitext(entry.name)[1].lower()
             if ext in SUPPORT_EXT:
-                full_path = os.path.join(dirpath, fname)
-                img_path_list.append(full_path)
-    img_path_list.sort()
-    return img_path_list
+                groups[BUSINESS_NAME].append(entry.path)
+
+    # 扫描dim子目录，支持嵌套子文件夹
+    if os.path.isdir(dim_dir):
+        for dirpath, _, filenames in os.walk(dim_dir):
+            for fname in filenames:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in SUPPORT_EXT:
+                    groups[f"{BUSINESS_NAME}_dim"].append(os.path.join(dirpath, fname))
+    else:
+        print(f"提示：dim目录不存在 {dim_dir}")
+
+    # 扫描neg子目录，支持嵌套子文件夹
+    if os.path.isdir(neg_dir):
+        for dirpath, _, filenames in os.walk(neg_dir):
+            for fname in filenames:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in SUPPORT_EXT:
+                    groups[f"{BUSINESS_NAME}_neg"].append(os.path.join(dirpath, fname))
+    else:
+        print(f"提示：neg目录不存在 {neg_dir}")
+
+    # 每组图片路径排序
+    for g in groups:
+        groups[g].sort()
+    return groups
 
 
 def build_image_base64(image_path: str) -> str:
@@ -98,37 +145,25 @@ def poll_task_status(task_id: str, headers: dict) -> Tuple[Optional[str], Option
             print(f"【processing】分析进行中，轮询 {poll_times}/{MAX_POLL_COUNT} task_id:{task_id}")
             time.sleep(POLL_WAIT_SECONDS)
         else:
-            # 其他未知状态直接返回报文
             return json.dumps(resp_json, ensure_ascii=False), None
     return None, "POLL_LIMIT_REACHED"
 
 
-def main():
-    result_file = get_result_file_path()
-    fw = open(result_file, "w", encoding="utf-8")
-
-    image_list = find_all_image_files(ROOT_FOLDER)
-    total_cnt = len(image_list)
-    if total_cnt == 0:
-        print(f"警告：{ROOT_FOLDER} 及其所有子目录未找到图片文件！")
-        fw.close()
+def process_one_group(group_name: str, img_list: List[str], headers):
+    """处理一个分组，输出独立报告文件"""
+    if len(img_list) == 0:
+        print(f"\n===== 分组【{group_name}】无图片，跳过 =====")
         return
+    result_file = get_group_result_file_path(group_name)
+    fw = open(result_file, "w", encoding="utf-8")
+    total_cnt = len(img_list)
 
-    headers = {
-        "Content-Type": "application/json",
-        "authorization": AUTH_HEADER_AUTHORIZATION,
-        "user-agent": USER_AGENT,
-        "accept-language": "zh-CN,zh;q=0.9"
-    }
+    print("\n" + "=" * 70)
+    print(f"▶ 开始处理分组：【{group_name}】，图片总数：{total_cnt}")
+    print(f"分组输出报告：{result_file}")
+    print("=" * 70)
 
-    print("=" * 65)
-    print(f"业务名称：{BUSINESS_NAME}")
-    print(f"扫描目录：{ROOT_FOLDER}（包含全部子文件夹）")
-    print(f"待处理图片总数：{total_cnt}")
-    print(f"结果输出文件：{result_file}")
-    print("=" * 65 + "\n")
-
-    for index, img_path in enumerate(image_list, start=1):
+    for index, img_path in enumerate(img_list, start=1):
         print(f"\n===== [{index}/{total_cnt}] 当前图片：{img_path} =====")
         try:
             base64_str = build_image_base64(img_path)
@@ -136,6 +171,7 @@ def main():
             record = f"""
 ==========请求序号：{index}==========
 【读取图片异常 ERROR】
+分组：{group_name}
 错误信息：{str(e)}
 图片路径：{img_path}
 """
@@ -152,12 +188,13 @@ def main():
             "image_base64": base64_str
         }
 
-        # 1.提交图片获取task_id
+        # 提交图片获取task_id
         submit_json, submit_err = http_submit_image(payload, headers)
         if submit_err or submit_json is None:
             record = f"""
 ==========请求序号：{index}==========
 【提交图片异常 ERROR】
+分组：{group_name}
 错误编码：{submit_err}
 图片路径：{img_path}
 请求payload示例：
@@ -176,6 +213,7 @@ def main():
             record = f"""
 ==========请求序号：{index}==========
 【异常 ERROR】提交成功，但响应缺少task_id
+分组：{group_name}
 图片路径：{img_path}
 提交返回：{json.dumps(submit_json, ensure_ascii=False)}
 """
@@ -188,12 +226,13 @@ def main():
             continue
         print(f"提交成功 task_id = {task_id}")
 
-        # 2.轮询查询结果
+        # 轮询查询结果
         final_text, poll_err = poll_task_status(task_id, headers)
         if poll_err is not None or final_text is None:
             record = f"""
 ==========请求序号：{index}==========
 【任务查询异常 ERROR】
+分组：{group_name}
 错误编码：{poll_err}
 task_id：{task_id}
 图片路径：{img_path}
@@ -204,6 +243,7 @@ task_id：{task_id}
                 record = f"""
 ==========请求序号：{index}==========
 断言结果：PASS ✅
+分组：{group_name}
 断言匹配关键词：{ASSERT_KEYWORD}
 task_id：{task_id}
 图片路径：{img_path}
@@ -217,6 +257,7 @@ task_id：{task_id}
                 record = f"""
 ==========请求序号：{index}==========
 断言结果：ERROR ❌【响应不包含关键词：{ASSERT_KEYWORD}】
+分组：{group_name}
 错误编码：ASSERT_FAILED
 task_id：{task_id}
 图片路径：{img_path}
@@ -227,13 +268,33 @@ task_id：{task_id}
 
         fw.write(record)
         fw.flush()
-
         if index != total_cnt:
             print(f"\n等待 {WAIT_SECONDS}s 处理下一张图片...")
             time.sleep(WAIT_SECONDS)
 
     fw.close()
-    print(f"\n🎉 全部图片处理完毕！结果保存在：{result_file}")
+    print(f"\n✅ 分组【{group_name}】处理完成！报告：{result_file}")
+
+
+def main():
+    groups_dict = scan_group_images()
+    headers = {
+        "Content-Type": "application/json",
+        "authorization": AUTH_HEADER_AUTHORIZATION,
+        "user-agent": USER_AGENT,
+        "accept-language": "zh-CN,zh;q=0.9"
+    }
+    print("==== 分组统计 ====")
+    print(f"报告输出目录：{REPORTS_DIR}")
+    for gname, imgs in groups_dict.items():
+        print(f"  {gname} : {len(imgs)} 张图片")
+
+    # 执行顺序：正样本 → dim → neg
+    process_one_group(BUSINESS_NAME, groups_dict[BUSINESS_NAME], headers)
+    process_one_group(f"{BUSINESS_NAME}_dim", groups_dict[f"{BUSINESS_NAME}_dim"], headers)
+    process_one_group(f"{BUSINESS_NAME}_neg", groups_dict[f"{BUSINESS_NAME}_neg"], headers)
+
+    print("\n🎉 全部分组处理完毕！所有报告存放在reports目录。")
 
 
 if __name__ == "__main__":
