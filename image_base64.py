@@ -3,6 +3,7 @@ import os
 import base64
 import time
 import requests
+import json
 from typing import Optional, Tuple
 # 导入基础配置
 from config import (
@@ -16,6 +17,10 @@ from config import (
 IMAGE_FOLDER = os.path.join(ROOT_FOLDER, BUSINESS_NAME)
 BASE64_TXT_PATH = os.path.join(ROOT_FOLDER, f"{BUSINESS_NAME}_b64_list.txt")
 RESULT_TXT_PATH = os.path.join(ROOT_FOLDER, f"{BUSINESS_NAME}_api_result.txt")
+
+# processing / queued 轮询配置
+MAX_POLL_COUNT = 8       # 最大轮询次数
+POLL_WAIT_SECONDS = 15   # 每次轮询间隔秒
 
 
 def generate_base64_file():
@@ -55,9 +60,7 @@ def extract_base64_list(raw_lines):
 
 
 def send_request_with_retry(payload: dict, headers: dict) -> Tuple[Optional[requests.Response], Optional[str]]:
-    """封装请求函数，支持自动重试
-    返回：(响应对象/None, 错误信息/None)
-    """
+    """单次HTTP请求，网络层面重试"""
     retry_count = 0
     while retry_count <= MAX_RETRY:
         try:
@@ -80,8 +83,43 @@ def send_request_with_retry(payload: dict, headers: dict) -> Tuple[Optional[requ
             return None, f"REQUEST_ERROR:{str(e)}"
 
 
+def poll_until_completed(payload: dict, headers: dict) -> Tuple[Optional[str], Optional[str]]:
+    """
+    持续轮询，同时识别 queued / processing 两种等待状态
+    直到 status=completed 或达到最大轮询次数
+    返回：(最终completed完整响应文本, 错误信息)
+    """
+    poll_times = 0
+    while poll_times <= MAX_POLL_COUNT:
+        resp, err = send_request_with_retry(payload, headers)
+        if err or resp is None:
+            return None, err
+
+        resp_text = resp.text
+        try:
+            resp_json = json.loads(resp_text)
+        except json.JSONDecodeError:
+            # 返回非JSON，无法识别状态，直接作为最终结果
+            return resp_text, None
+
+        status = resp_json.get("status", "")
+        if status == "completed":
+            # 拿到最终结果，退出轮询
+            return resp_text, None
+        elif status in ("processing", "queued"):
+            poll_times += 1
+            if poll_times > MAX_POLL_COUNT:
+                return None, f"POLL_TIMEOUT:轮询{MAX_POLL_COUNT}次仍处于{status}"
+            print(f"【{status}】任务等待中，等待{POLL_WAIT_SECONDS}s，轮询 {poll_times}/{MAX_POLL_COUNT}")
+            time.sleep(POLL_WAIT_SECONDS)
+        else:
+            # 其他未知/失败状态，直接返回当前报文作为最终结果
+            return resp_text, None
+
+    return None, "POLL_LIMIT_REACHED"
+
+
 def send_request_and_save(b64_list):
-    """循环调用接口 + 断言逻辑"""
     output_fw = open(RESULT_TXT_PATH, "w", encoding="utf-8")
     total = len(b64_list)
     headers = {
@@ -97,10 +135,10 @@ def send_request_and_save(b64_list):
             "image_base64": b64_str
         }
         print(f"\n===== [{idx}/{total}] 发起请求 =====")
-        resp, err = send_request_with_retry(payload, headers)
+        final_resp_text, err = poll_until_completed(payload, headers)
 
-        if err is not None or resp is None:
-            # 网络/超时类异常
+        if err is not None or final_resp_text is None:
+            # 网络异常 / 轮询超时
             record = f"""
 ==========请求序号：{idx}==========
 【请求异常 ERROR】
@@ -108,27 +146,23 @@ def send_request_and_save(b64_list):
 请求payload示例：
 {{"question":"{QUESTION_TEXT}","image_base64":"{b64_str[:150]}......"}}
 """
-            print("请求多次重试依然失败！")
+            print(f"任务失败！{err}")
         else:
-            resp_text = resp.text
-            if ASSERT_KEYWORD in resp_text:
-                # 断言成功：完整输出返回内容
+            # 只有走出轮询后的final_resp_text才参与断言
+            if ASSERT_KEYWORD in final_resp_text:
                 record = f"""
 ==========请求序号：{idx}==========
-状态码：{resp.status_code}
 断言结果：PASS ✅
 断言匹配关键词：{ASSERT_KEYWORD}
 请求payload示例：
 {{"question":"{QUESTION_TEXT}","image_base64":"{b64_str[:150]}......"}}
 完整返回内容：
-{resp_text}
+{final_resp_text}
 """
                 print("请求成功，断言通过，记录返回数据")
             else:
-                # 接口通了，但是缺少关键词（断言失败，不打印返回文本）
                 record = f"""
 ==========请求序号：{idx}==========
-状态码：{resp.status_code}
 断言结果：ERROR ❌【响应不包含关键词：{ASSERT_KEYWORD}】
 错误编码：ASSERT_FAILED
 请求payload示例：
@@ -153,7 +187,8 @@ if __name__ == "__main__":
     print(f"图片目录：{IMAGE_FOLDER}")
     print(f"Base64文件：{BASE64_TXT_PATH}")
     print(f"结果文件：{RESULT_TXT_PATH}")
-    print(f"断言匹配关键词：{ASSERT_KEYWORD}\n")
+    print(f"断言匹配关键词：{ASSERT_KEYWORD}")
+    print(f"最大轮询次数：{MAX_POLL_COUNT}，轮询间隔：{POLL_WAIT_SECONDS}s\n")
 
     raw_text_lines = generate_base64_file()
     b64_array = extract_base64_list(raw_text_lines)

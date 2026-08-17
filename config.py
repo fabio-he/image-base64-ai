@@ -5,8 +5,8 @@ BUSINESS_NAME = "踩踏绿化"
 ROOT_FOLDER = r"D:\data\踩踏绿化"
 
 # 请求参数
-QUESTION_TEXT = "是否有践踏绿化行为"
-API_URL = "https://gives-click-monkey-wait.trycloudflare.com/api/analyze/jobs"
+QUESTION_TEXT = "是否有践踏绿化行为,回答是或者否"
+API_URL = "http://123.206.99.114:5002/api/analyze/jobs"
 
 # 断言关键词配置
 ASSERT_KEYWORD = "answer"
