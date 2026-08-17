@@ -4,124 +4,116 @@ import base64
 import time
 import requests
 import json
+from datetime import datetime
 from typing import Optional, Tuple
-# 导入基础配置
+# 导入配置
 from config import (
     BUSINESS_NAME, ROOT_FOLDER,
-    QUESTION_TEXT, API_URL, ASSERT_KEYWORD,
-    WAIT_SECONDS, REQUEST_TIMEOUT, MAX_RETRY, SUPPORT_EXT,
-    AUTH_HEADER_AUTHORIZATION, USER_AGENT
+    QUESTION_TEXT, API_URL, ASSERT_KEYWORD, STATUS_QUERY_BASE_URL,
+    WAIT_SECONDS, REQUEST_TIMEOUT, MAX_RETRY, MAX_POLL_COUNT, POLL_WAIT_SECONDS,
+    AUTH_HEADER_AUTHORIZATION, USER_AGENT, SUPPORT_EXT, OVERWRITE_RESULT_FILE
 )
 
-# ===================== 运行时自动拼接路径（使用os.path.join，跨平台兼容） =====================
-IMAGE_FOLDER = os.path.join(ROOT_FOLDER, BUSINESS_NAME)
-BASE64_TXT_PATH = os.path.join(ROOT_FOLDER, f"{BUSINESS_NAME}_b64_list.txt")
-RESULT_TXT_PATH = os.path.join(ROOT_FOLDER, f"{BUSINESS_NAME}_api_result.txt")
 
-# processing / queued 轮询配置
-MAX_POLL_COUNT = 8       # 最大轮询次数
-POLL_WAIT_SECONDS = 15   # 每次轮询间隔秒
-
-
-def generate_base64_file():
-    """步骤1：批量图片转base64，保存到文本"""
-    lines = []
-    if not os.path.exists(IMAGE_FOLDER):
-        print(f"错误：图片文件夹不存在 -> {IMAGE_FOLDER}")
-        exit(1)
-    for filename in os.listdir(IMAGE_FOLDER):
-        full_path = os.path.join(IMAGE_FOLDER, filename)
-        if not os.path.isfile(full_path):
-            continue
-        ext = os.path.splitext(filename)[1].lower()
-        if ext not in SUPPORT_EXT:
-            continue
-        with open(full_path, "rb") as f:
-            raw = f.read()
-            b64 = base64.b64encode(raw).decode("utf-8")
-            mime = ext.lstrip(".")
-            data_url = f"data:image/{mime};base64,{b64}"
-        lines.append(f"【{filename}】")
-        lines.append(data_url)
-        print(f"已生成base64：{filename}")
-    with open(BASE64_TXT_PATH, "w", encoding="utf-8") as fw:
-        fw.write("\n".join(lines))
-    print(f"\nbase64清单已保存至：{BASE64_TXT_PATH}")
-    return lines
+def get_result_file_path() -> str:
+    """根据开关生成输出文件路径"""
+    if OVERWRITE_RESULT_FILE:
+        filename = "api_result.txt"
+    else:
+        now = datetime.now()
+        filename = f"api_result_{now.hour}_{now.minute}.txt"
+    return os.path.join(ROOT_FOLDER, filename)
 
 
-def extract_base64_list(raw_lines):
-    """步骤2：从生成文档提取纯base64字符串列表"""
-    b64_list = []
-    for line in raw_lines:
-        if line.startswith("data:image/"):
-            b64_list.append(line.strip())
-    return b64_list
+def find_all_image_files(root_dir: str):
+    """递归遍历根目录+所有子目录，收集全部图片"""
+    img_path_list = []
+    for dirpath, _, filenames in os.walk(root_dir):
+        for fname in filenames:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext in SUPPORT_EXT:
+                full_path = os.path.join(dirpath, fname)
+                img_path_list.append(full_path)
+    img_path_list.sort()
+    return img_path_list
 
 
-def send_request_with_retry(payload: dict, headers: dict) -> Tuple[Optional[requests.Response], Optional[str]]:
-    """单次HTTP请求，网络层面重试"""
-    retry_count = 0
-    while retry_count <= MAX_RETRY:
+def build_image_base64(image_path: str) -> str:
+    """读取本地图片，生成 data:image/xxx;base64,xxx 字符串"""
+    with open(image_path, "rb") as f:
+        raw_bytes = f.read()
+    b64_encoded = base64.b64encode(raw_bytes).decode("utf-8")
+    ext = os.path.splitext(image_path)[1].lstrip(".").lower()
+    return f"data:image/{ext};base64,{b64_encoded}"
+
+
+def http_submit_image(payload: dict, headers: dict) -> Tuple[Optional[dict], Optional[str]]:
+    """POST提交图片，获取task_id"""
+    retry_times = 0
+    while retry_times <= MAX_RETRY:
         try:
             resp = requests.post(
-                API_URL,
+                url=API_URL,
                 json=payload,
                 headers=headers,
                 timeout=REQUEST_TIMEOUT
             )
-            return resp, None
+            try:
+                return resp.json(), None
+            except json.JSONDecodeError:
+                return None, f"SUBMIT_NOT_JSON: {resp.text[:300]}"
         except requests.exceptions.ReadTimeout:
-            retry_count += 1
-            err_msg = f"读取超时，当前重试次数 {retry_count}/{MAX_RETRY}"
+            retry_times += 1
+            err_msg = f"提交超时，重试 {retry_times}/{MAX_RETRY}"
             print(err_msg)
-            if retry_count <= MAX_RETRY:
-                time.sleep(10)
+            if retry_times <= MAX_RETRY:
+                time.sleep(3)
             else:
-                return None, "READ_TIMEOUT_MAX_RETRY"
+                return None, "SUBMIT_READ_TIMEOUT_MAX"
         except Exception as e:
-            return None, f"REQUEST_ERROR:{str(e)}"
+            return None, f"SUBMIT_ERROR:{str(e)}"
 
 
-def poll_until_completed(payload: dict, headers: dict) -> Tuple[Optional[str], Optional[str]]:
-    """
-    持续轮询，同时识别 queued / processing 两种等待状态
-    直到 status=completed 或达到最大轮询次数
-    返回：(最终completed完整响应文本, 错误信息)
-    """
+def poll_task_status(task_id: str, headers: dict) -> Tuple[Optional[str], Optional[str]]:
+    """循环GET查询任务直到completed"""
     poll_times = 0
     while poll_times <= MAX_POLL_COUNT:
-        resp, err = send_request_with_retry(payload, headers)
-        if err or resp is None:
-            return None, err
-
-        resp_text = resp.text
+        query_url = STATUS_QUERY_BASE_URL.format(task_id=task_id)
         try:
-            resp_json = json.loads(resp_text)
-        except json.JSONDecodeError:
-            # 返回非JSON，无法识别状态，直接作为最终结果
-            return resp_text, None
+            resp = requests.get(query_url, headers=headers, timeout=REQUEST_TIMEOUT)
+            resp_json = resp.json()
+        except Exception as e:
+            poll_times += 1
+            print(f"【状态查询异常】{str(e)}，等待重试")
+            time.sleep(POLL_WAIT_SECONDS)
+            continue
 
         status = resp_json.get("status", "")
         if status == "completed":
-            # 拿到最终结果，退出轮询
-            return resp_text, None
-        elif status in ("processing", "queued"):
+            return json.dumps(resp_json, ensure_ascii=False), None
+        elif status == "processing":
             poll_times += 1
             if poll_times > MAX_POLL_COUNT:
-                return None, f"POLL_TIMEOUT:轮询{MAX_POLL_COUNT}次仍处于{status}"
-            print(f"【{status}】任务等待中，等待{POLL_WAIT_SECONDS}s，轮询 {poll_times}/{MAX_POLL_COUNT}")
+                return None, f"POLL_TIMEOUT:轮询{MAX_POLL_COUNT}次仍processing task_id={task_id}"
+            print(f"【processing】分析进行中，轮询 {poll_times}/{MAX_POLL_COUNT} task_id:{task_id}")
             time.sleep(POLL_WAIT_SECONDS)
         else:
-            # 其他未知/失败状态，直接返回当前报文作为最终结果
-            return resp_text, None
-
+            # 其他未知状态直接返回报文
+            return json.dumps(resp_json, ensure_ascii=False), None
     return None, "POLL_LIMIT_REACHED"
 
 
-def send_request_and_save(b64_list):
-    output_fw = open(RESULT_TXT_PATH, "w", encoding="utf-8")
-    total = len(b64_list)
+def main():
+    result_file = get_result_file_path()
+    fw = open(result_file, "w", encoding="utf-8")
+
+    image_list = find_all_image_files(ROOT_FOLDER)
+    total_cnt = len(image_list)
+    if total_cnt == 0:
+        print(f"警告：{ROOT_FOLDER} 及其所有子目录未找到图片文件！")
+        fw.close()
+        return
+
     headers = {
         "Content-Type": "application/json",
         "authorization": AUTH_HEADER_AUTHORIZATION,
@@ -129,70 +121,120 @@ def send_request_and_save(b64_list):
         "accept-language": "zh-CN,zh;q=0.9"
     }
 
-    for idx, b64_str in enumerate(b64_list, 1):
+    print("=" * 65)
+    print(f"业务名称：{BUSINESS_NAME}")
+    print(f"扫描目录：{ROOT_FOLDER}（包含全部子文件夹）")
+    print(f"待处理图片总数：{total_cnt}")
+    print(f"结果输出文件：{result_file}")
+    print("=" * 65 + "\n")
+
+    for index, img_path in enumerate(image_list, start=1):
+        print(f"\n===== [{index}/{total_cnt}] 当前图片：{img_path} =====")
+        try:
+            base64_str = build_image_base64(img_path)
+        except Exception as e:
+            record = f"""
+==========请求序号：{index}==========
+【读取图片异常 ERROR】
+错误信息：{str(e)}
+图片路径：{img_path}
+"""
+            print(f"图片读取失败：{e}")
+            fw.write(record)
+            fw.flush()
+            if index != total_cnt:
+                print(f"等待 {WAIT_SECONDS}s 处理下一张\n")
+                time.sleep(WAIT_SECONDS)
+            continue
+
         payload = {
             "question": QUESTION_TEXT,
-            "image_base64": b64_str
+            "image_base64": base64_str
         }
-        print(f"\n===== [{idx}/{total}] 发起请求 =====")
-        final_resp_text, err = poll_until_completed(payload, headers)
 
-        if err is not None or final_resp_text is None:
-            # 网络异常 / 轮询超时
+        # 1.提交图片获取task_id
+        submit_json, submit_err = http_submit_image(payload, headers)
+        if submit_err or submit_json is None:
             record = f"""
-==========请求序号：{idx}==========
-【请求异常 ERROR】
-错误编码：{err}
+==========请求序号：{index}==========
+【提交图片异常 ERROR】
+错误编码：{submit_err}
+图片路径：{img_path}
 请求payload示例：
-{{"question":"{QUESTION_TEXT}","image_base64":"{b64_str[:150]}......"}}
+{{"question":"{QUESTION_TEXT}","image_base64":"{base64_str[:150]}......"}}
 """
-            print(f"任务失败！{err}")
+            print(f"图片提交失败：{submit_err}")
+            fw.write(record)
+            fw.flush()
+            if index != total_cnt:
+                print(f"等待 {WAIT_SECONDS}s 处理下一张\n")
+                time.sleep(WAIT_SECONDS)
+            continue
+
+        task_id = submit_json.get("task_id")
+        if not task_id:
+            record = f"""
+==========请求序号：{index}==========
+【异常 ERROR】提交成功，但响应缺少task_id
+图片路径：{img_path}
+提交返回：{json.dumps(submit_json, ensure_ascii=False)}
+"""
+            print("无task_id，跳过当前图片")
+            fw.write(record)
+            fw.flush()
+            if index != total_cnt:
+                print(f"等待 {WAIT_SECONDS}s 处理下一张\n")
+                time.sleep(WAIT_SECONDS)
+            continue
+        print(f"提交成功 task_id = {task_id}")
+
+        # 2.轮询查询结果
+        final_text, poll_err = poll_task_status(task_id, headers)
+        if poll_err is not None or final_text is None:
+            record = f"""
+==========请求序号：{index}==========
+【任务查询异常 ERROR】
+错误编码：{poll_err}
+task_id：{task_id}
+图片路径：{img_path}
+"""
+            print(f"任务查询失败：{poll_err}")
         else:
-            # 只有走出轮询后的final_resp_text才参与断言
-            if ASSERT_KEYWORD in final_resp_text:
+            if ASSERT_KEYWORD in final_text:
                 record = f"""
-==========请求序号：{idx}==========
+==========请求序号：{index}==========
 断言结果：PASS ✅
 断言匹配关键词：{ASSERT_KEYWORD}
+task_id：{task_id}
+图片路径：{img_path}
 请求payload示例：
-{{"question":"{QUESTION_TEXT}","image_base64":"{b64_str[:150]}......"}}
+{{"question":"{QUESTION_TEXT}","image_base64":"{base64_str[:150]}......"}}
 完整返回内容：
-{final_resp_text}
+{final_text}
 """
-                print("请求成功，断言通过，记录返回数据")
+                print("✅ 请求完成，断言匹配成功")
             else:
                 record = f"""
-==========请求序号：{idx}==========
+==========请求序号：{index}==========
 断言结果：ERROR ❌【响应不包含关键词：{ASSERT_KEYWORD}】
 错误编码：ASSERT_FAILED
+task_id：{task_id}
+图片路径：{img_path}
 请求payload示例：
-{{"question":"{QUESTION_TEXT}","image_base64":"{b64_str[:150]}......"}}
+{{"question":"{QUESTION_TEXT}","image_base64":"{base64_str[:150]}......"}}
 """
-                print("请求完成，但断言不匹配！")
+                print("❌ 请求完成，未匹配关键词")
 
-        output_fw.write(record)
-        output_fw.flush()
+        fw.write(record)
+        fw.flush()
 
-        if idx != total:
-            print(f"等待 {WAIT_SECONDS}s 进行下一张...")
+        if index != total_cnt:
+            print(f"\n等待 {WAIT_SECONDS}s 处理下一张图片...")
             time.sleep(WAIT_SECONDS)
-    output_fw.close()
-    print(f"\n全部执行完成！结果保存在：{RESULT_TXT_PATH}")
+
+    fw.close()
+    print(f"\n🎉 全部图片处理完毕！结果保存在：{result_file}")
 
 
 if __name__ == "__main__":
-    print("==== 当前运行配置 ====")
-    print(f"业务名称：{BUSINESS_NAME}")
-    print(f"根目录：{ROOT_FOLDER}")
-    print(f"图片目录：{IMAGE_FOLDER}")
-    print(f"Base64文件：{BASE64_TXT_PATH}")
-    print(f"结果文件：{RESULT_TXT_PATH}")
-    print(f"断言匹配关键词：{ASSERT_KEYWORD}")
-    print(f"最大轮询次数：{MAX_POLL_COUNT}，轮询间隔：{POLL_WAIT_SECONDS}s\n")
-
-    raw_text_lines = generate_base64_file()
-    b64_array = extract_base64_list(raw_text_lines)
-    if not b64_array:
-        print("未找到任何base64数据，请检查图片目录！")
-    else:
-        send_request_and_save(b64_array)
+    main()

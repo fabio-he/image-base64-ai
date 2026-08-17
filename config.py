@@ -20,3 +20,15 @@ SUPPORT_EXT = (".jpg", ".jpeg", ".png", ".webp")
 # 鉴权信息
 AUTH_HEADER_AUTHORIZATION = "Basic dXNlcjoxMjM0NTY3OA=="
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+
+# ===================== 【新增配置项 请勿删除】 =====================
+# Task状态查询GET接口模板
+STATUS_QUERY_BASE_URL = "http://123.206.99.114:5002/api/analyze/status/{task_id}"
+# Task轮询配置
+MAX_POLL_COUNT = 12
+POLL_WAIT_SECONDS = 10
+
+# 输出文件策略开关
+# True = 覆盖文件 api_result.txt
+# False = 新建带时分文件 api_result_HH_MM.txt
+OVERWRITE_RESULT_FILE = False
