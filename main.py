@@ -13,11 +13,9 @@ from report_render import handle_one_group
 from config import (
     ACTIVE_BUSINESS,
     BUSINESS_POOL,
-    BUSINESS_NAME,
-    ROOT_FOLDER,
-    API_URL,   # ←加上这一行
-    QUESTION_TEXT,
-    ASSERT_KEYWORD,
+    ALL_BUSINESS_LIST,
+    RUN_ALL_BUSINESS,
+    API_URL,
     STATUS_QUERY_BASE_URL,
     WAIT_SECONDS,
     REQUEST_TIMEOUT,
@@ -29,25 +27,24 @@ from config import (
     SUPPORT_EXT,
     OVERWRITE_RESULT_FILE,
 )
-# -------------------------- 全局常量 --------------------------
-REPORTS_DIR = os.path.join(ROOT_FOLDER, "reports")
-os.makedirs(REPORTS_DIR, exist_ok=True)
+
 GENERATE_TXT_RAW = True   # 是否同时输出原始txt日志
 
 
-def scan_image_groups() -> Dict[str, List[str]]:
+def scan_image_groups(business_dir: str, biz_name: str) -> Dict[str, List[str]]:
     """
     扫描业务目录，按分组收集图片路径
-    - BUSINESS_NAME目录直接图片 → 主样本组
+    - biz_name目录直接图片 → 主样本组
     - dim子目录 → dim组
     - neg子目录 → neg组
+    :param business_dir: 当前业务图片根目录
+    :param biz_name: 当前业务名称
     :return: {分组名: [图片全路径列表]}
     """
-    business_dir = ROOT_FOLDER
     groups: Dict[str, List[str]] = {
-        BUSINESS_NAME: [],
-        f"{BUSINESS_NAME}_dim": [],
-        f"{BUSINESS_NAME}_neg": [],
+        biz_name: [],
+        f"{biz_name}_dim": [],
+        f"{biz_name}_neg": [],
     }
     dim_dir = os.path.join(business_dir, "dim")
     neg_dir = os.path.join(business_dir, "neg")
@@ -61,7 +58,7 @@ def scan_image_groups() -> Dict[str, List[str]]:
         if entry.is_file():
             ext = os.path.splitext(entry.name)[1].lower()
             if ext in SUPPORT_EXT:
-                groups[BUSINESS_NAME].append(entry.path)
+                groups[biz_name].append(entry.path)
 
     # 扫描dim子目录（支持嵌套）
     if os.path.isdir(dim_dir):
@@ -69,7 +66,7 @@ def scan_image_groups() -> Dict[str, List[str]]:
             for fname in filenames:
                 ext = os.path.splitext(fname)[1].lower()
                 if ext in SUPPORT_EXT:
-                    groups[f"{BUSINESS_NAME}_dim"].append(os.path.join(dirpath, fname))
+                    groups[f"{biz_name}_dim"].append(os.path.join(dirpath, fname))
     else:
         print(f"[提示] dim目录不存在: {dim_dir}")
 
@@ -79,7 +76,7 @@ def scan_image_groups() -> Dict[str, List[str]]:
             for fname in filenames:
                 ext = os.path.splitext(fname)[1].lower()
                 if ext in SUPPORT_EXT:
-                    groups[f"{BUSINESS_NAME}_neg"].append(os.path.join(dirpath, fname))
+                    groups[f"{biz_name}_neg"].append(os.path.join(dirpath, fname))
     else:
         print(f"[提示] neg目录不存在: {neg_dir}")
 
@@ -142,11 +139,11 @@ def wait_task_finish(task_id: str, headers: dict) -> Tuple[Optional[str], Option
         status = resp_json.get("status", "")
         if status == "completed":
             return json.dumps(resp_json, ensure_ascii=False), None
-        elif status == "processing":
+        elif status in ("processing", "queued"):
             poll_count += 1
             if poll_count > MAX_POLL_COUNT:
-                return None, f"POLL_TIMEOUT:轮询{MAX_POLL_COUNT}次仍processing task_id={task_id}"
-            print(f"[处理中] 轮询 {poll_count}/{MAX_POLL_COUNT}, task_id={task_id}")
+                return None, f"POLL_TIMEOUT:轮询{MAX_POLL_COUNT}次仍处于{status}, task_id={task_id}"
+            print(f"[{status}] 轮询 {poll_count}/{MAX_POLL_COUNT}, task_id={task_id}")
             time.sleep(POLL_WAIT_SECONDS)
         else:
             return json.dumps(resp_json, ensure_ascii=False), None
@@ -159,6 +156,8 @@ def process_single_image(
     img_path: str,
     group_name: str,
     headers: dict,
+    question_text: str,
+    assert_keyword: str
 ) -> dict:
     """
     处理单张图片完整链路：编码→提交→轮询
@@ -193,7 +192,7 @@ def process_single_image(
         return res
 
     payload = {
-        "question": QUESTION_TEXT,
+        "question": question_text,
         "image_base64": b64_str
     }
 
@@ -232,13 +231,13 @@ task_id：{task_id}
 
     res["result_raw"] = result_text
 
-    if ASSERT_KEYWORD in result_text:
+    if assert_keyword in result_text:
         res["status"] = "PASS"
         record = f"""
 ==========请求序号：{idx}==========
 断言结果：PASS ✅
 分组：{group_name}
-匹配关键词：{ASSERT_KEYWORD}
+匹配关键词：{assert_keyword}
 task_id：{task_id}
 图片路径：{img_path}
 完整返回：
@@ -249,7 +248,7 @@ task_id：{task_id}
         res["status"] = "FAIL"
         record = f"""
 ==========请求序号：{idx}==========
-断言结果：FAIL ❌【未匹配关键词：{ASSERT_KEYWORD}】
+断言结果：FAIL ❌【未匹配关键词：{assert_keyword}】
 分组：{group_name}
 task_id：{task_id}
 图片路径：{img_path}
@@ -261,8 +260,12 @@ task_id：{task_id}
     return res
 
 
-def main():
-    image_groups = scan_image_groups()
+def run_business(biz_name: str, biz_cfg: dict):
+    """执行单个业务"""
+    biz_root = biz_cfg["root_folder"]
+    biz_question = biz_cfg["question"]
+    biz_assert_key = biz_cfg["assert_keyword"]
+
     headers = {
         "Content-Type": "application/json",
         "authorization": AUTH_HEADER_AUTHORIZATION,
@@ -270,42 +273,70 @@ def main():
         "accept-language": "zh-CN,zh;q=0.9",
     }
 
-    print("===== 图片AI检测任务启动 =====")
-    print(f"当前激活业务：{ACTIVE_BUSINESS}")
-    print(f"业务根目录：{ROOT_FOLDER}")
-    print(f"报告输出目录：{REPORTS_DIR}")
+    reports_dir = os.path.join(biz_root, "reports")
+    os.makedirs(reports_dir, exist_ok=True)
+
+    print(f"\n>>>>>>>>>>>>>>>>>>>> 开始执行业务：【{biz_name}】")
+    print(f"业务根目录：{biz_root}")
+    print(f"报告输出目录：{reports_dir}")
     print("-" * 60)
+
+    image_groups = scan_image_groups(business_dir=biz_root, biz_name=biz_name)
 
     for g_name, imgs in image_groups.items():
         print(f"  {g_name:<20}: {len(imgs)} 张")
 
-    # 调用外部封装函数，传入单图处理函数
+    # 依次处理3个分组
     handle_one_group(
-        group_name=BUSINESS_NAME,
-        img_list=image_groups[BUSINESS_NAME],
+        group_name=biz_name,
+        img_list=image_groups[biz_name],
         headers=headers,
-        reports_dir=REPORTS_DIR,
+        reports_dir=reports_dir,
         process_func=process_single_image,
-        generate_txt_raw=GENERATE_TXT_RAW
+        generate_txt_raw=GENERATE_TXT_RAW,
+        question_text=biz_question,
+        assert_keyword=biz_assert_key
     )
     handle_one_group(
-        group_name=f"{BUSINESS_NAME}_dim",
-        img_list=image_groups[f"{BUSINESS_NAME}_dim"],
+        group_name=f"{biz_name}_dim",
+        img_list=image_groups[f"{biz_name}_dim"],
         headers=headers,
-        reports_dir=REPORTS_DIR,
+        reports_dir=reports_dir,
         process_func=process_single_image,
-        generate_txt_raw=GENERATE_TXT_RAW
+        generate_txt_raw=GENERATE_TXT_RAW,
+        question_text=biz_question,
+        assert_keyword=biz_assert_key
     )
     handle_one_group(
-        group_name=f"{BUSINESS_NAME}_neg",
-        img_list=image_groups[f"{BUSINESS_NAME}_neg"],
+        group_name=f"{biz_name}_neg",
+        img_list=image_groups[f"{biz_name}_neg"],
         headers=headers,
-        reports_dir=REPORTS_DIR,
+        reports_dir=reports_dir,
         process_func=process_single_image,
-        generate_txt_raw=GENERATE_TXT_RAW
+        generate_txt_raw=GENERATE_TXT_RAW,
+        question_text=biz_question,
+        assert_keyword=biz_assert_key
     )
+    print(f"<<<<<<<<<<<<<<<<<<<<业务【{biz_name}】执行完成\n")
 
-    print("\n🎉 全部任务执行完毕！请查看reports目录下txt与html报告。")
+
+def main():
+    print("===== 图片AI检测任务启动 =====")
+    if RUN_ALL_BUSINESS:
+        print(f"🔁 批量模式开启，待执行业务总数：{len(ALL_BUSINESS_LIST)}")
+        for biz_name in ALL_BUSINESS_LIST:
+            cfg = BUSINESS_POOL[biz_name]
+            biz_root = cfg["root_folder"]
+            if not os.path.isdir(biz_root):
+                print(f"⚠️ 业务【{biz_name}】目录不存在 {biz_root} → 跳过该业务")
+                continue
+            run_business(biz_name, cfg)
+        print("\n🎉 ✨【全部业务批量执行完毕】✨🎉")
+
+    else:
+        print(f"▶️ 单业务模式，当前激活业务：{ACTIVE_BUSINESS}")
+        run_business(ACTIVE_BUSINESS, BUSINESS_POOL[ACTIVE_BUSINESS])
+        print("\n🎉 单业务任务执行完毕！请查看reports目录下txt与html报告。")
 
 
 if __name__ == "__main__":
