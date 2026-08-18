@@ -98,4 +98,4 @@ POLL_WAIT_SECONDS = 10
 # 输出文件策略开关
 # True = 覆盖文件 xxx.txt
 # False = 新建带时分文件 xxx_HH_MM.txt
-OVERWRITE_RESULT_FILE = False
+OVERWRITE_RESULT_FILE = True
