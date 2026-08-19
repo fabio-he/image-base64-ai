@@ -27,32 +27,28 @@
 - re / csv：报告二次解析、数据统计导出<br>
 
 ## 目录结构说明<br>
-image-base64-ai/ 项目根目录<br>
-config.py  全局配置文件【业务池、接口地址、鉴权、超时、重试、轮询参数】<br>
-main.py  核心业务推理主程序<br>
-report_render.py  报告处理模块：分组调度、txt追加写入、Jinja2 html报告生成<br>
-stat_report.py  报告后统计脚本：解析txt，区分正常 / 异常，输出csv统计<br>
-run_all_and_stat.py  一键调度入口：命令行传参；推理 + 统计一体化执行<br>
-requirements.txt  python依赖清单<br>
-README.md  项目使用文档<br>
+image-base64-ai/<br>
+├─ config.py # 全局配置、业务池、鉴权、超时、轮询参数<br>
+├─ main.py # 主运行入口，批量遍历图片、提交 API 任务<br>
+├─ report_render.py # HTML 报告渲染模块（Jinja2）<br>
+├─ stat_report.py # 普通统计脚本：解析 reports 下 txt，输出业务 + 分组统计报告<br>
+├─ calc_accuracy.py # 业务真值准确率脚本：计算符合业务预期的准确率<br>
+├─ requirements.txt # 第三方依赖清单<br>
+└─ README.md<br>
 
 ### 数据集磁盘目录规范（非常重要）<br>
 > 数据集总根目录示例：`D:\data\盈盾图片\盈盾`<br>
 > ⚠️ 业务文件夹名称 **必须和config.py BUSINESS_POOL里面key名称完全一致，大小写敏感**<br>
-D:\data\盈盾图片\盈盾 【数据集总根目录】<br>
-安全帽/ 业务名称，与BUSINESS_POOL key保持一致<br>
-  dim/ dim正样本文件夹，支持多层子目录嵌套<br>
-  neg/ neg负样本文件夹，支持多层子目录嵌套<br>
-  001.jpg,002.png 业务根目录直接存放的图片<br>
-  reports/ 程序运行后自动生成，存放txt原始报告、html报告<br>
-踩踏绿化/<br>
-  dim/<br>
-  neg/<br>
-  reports/<br>
-安全绳/<br>
-  dim/<br>
-  neg/<br>
-  reports/<br>
+D:\data\ 盈盾图片 \ 盈盾<br>
+├─垃圾桶 /<br>
+│ ├─ *.jpg<br>
+│ ├─dim/<br>
+│ └─neg/<br>
+├─小包垃圾 /<br>
+│ ├─ *.jpg<br>
+│ ├─dim/<br>
+│ └─neg/<br>
+└─reports/ # 自动生成，所有 txt、html 报告输出到此<br>
 > reports目录**不需要手动创建**，脚本运行会自动生成；<br>
 > 支持图片格式：`.jpg .jpeg .png .webp`；其他格式会自动跳过。<br>
 
@@ -111,3 +107,15 @@ AUTH_HEADER_AUTHORIZATION = "Basic dXNlcjoxMjM0NTY3OA=="          # Basic鉴权�
 ACTIVE_BUSINESS = "安全帽"  # 单业务模式默认激活业务，命令行传参会内存覆盖该值
 RUN_ALL_BUSINESS = True     # 是否默认开启全业务模式；run_all_and_stat运行时会被命令行参数覆盖
 ```
+
+### 步骤4. 常见问题
+#### 4.1 NameError: name 'datetime' is not defined
+``在对应脚本头部增加导入 from datetime import datetime``
+#### 4.2 Read timed out 读取超时
+``config.py 调大REQUEST_TIMEOUT，接口每张图片业务处理接近 2 分钟，建议设置 420``
+#### 4.3 业务统计结果全部为 0
+``业务目录下缺少 reports 文件夹，或者 reports 目录没有生成 *.txt 原始结果；需要先运行 main.py 跑完图片生成日志``
+#### 4.4 部分业务没有 dim/neg 目录
+``脚本会自动填充 0，不影响统计，不会报错``
+#### 4.5 Basic Auth 鉴权
+``抓包拿到 header 中Authorization: Basic xxxxx，直接复制填入 config 配置项``
