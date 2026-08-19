@@ -70,7 +70,7 @@ BUSINESS_POOL = {
 RUN_ALL_BUSINESS = True
 
 # 【单业务模式生效】仅 RUN_ALL_BUSINESS=False 时使用
-ACTIVE_BUSINESS = "小包垃圾"
+ACTIVE_BUSINESS = "疏散指示灯"
 
 # 多业务模式下，导出全部业务列表供main.py读取
 ALL_BUSINESS_LIST = list(BUSINESS_POOL.keys())
@@ -80,7 +80,7 @@ ALL_BUSINESS_LIST = list(BUSINESS_POOL.keys())
 API_URL = "http://123.206.99.114:5002/api/analyze/jobs"
 
 # 调度、超时、重试设置
-WAIT_SECONDS = 10
+WAIT_SECONDS = 1
 REQUEST_TIMEOUT = 420
 MAX_RETRY = 2
 SUPPORT_EXT = (".jpg", ".jpeg", ".png", ".webp")

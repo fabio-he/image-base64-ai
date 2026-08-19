@@ -28,7 +28,7 @@ def main():
 
     # 动态修改config模块变量（内存中生效，不修改磁盘文件）
     import config
-    config.RUN_ALL_BUSINESS = (args.mode == "all")
+    config.RUN_ALL_BUSINESS = (args.mode == "single")
     config.ACTIVE_BUSINESS = args.biz
 
     # 步骤1：执行推理

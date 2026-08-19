@@ -196,6 +196,9 @@ def process_single_image(
         "image_base64": b64_str
     }
 
+    # ========= 任务开始计时（从提交请求那一刻开始计时） =========
+    task_start = time.time()
+
     submit_resp, submit_err = submit_analyze_job(payload, headers)
     if submit_err or submit_resp is None:
         res["error_msg"] = submit_err
@@ -227,6 +230,9 @@ task_id：{task_id}
 """
         res["txt_chunk"] = record
         print(f"轮询失败: {poll_err}")
+        # 轮询失败也打印耗时
+        cost = round(time.time() - task_start, 2)
+        print(f"⏱ 本张图片任务耗时：{cost} 秒")
         return res
 
     res["result_raw"] = result_text
@@ -257,8 +263,12 @@ task_id：{task_id}
 """
         print("❌ 请求完成，未匹配关键词")
     res["txt_chunk"] = record
-    return res
 
+    # 正常结束，打印耗时（仅控制台输出，不写入txt）
+    cost = round(time.time() - task_start, 2)
+    print(f"⏱ 本张图片任务耗时：{cost} 秒")
+
+    return res
 
 def run_business(biz_name: str, biz_cfg: dict):
     """执行单个业务"""

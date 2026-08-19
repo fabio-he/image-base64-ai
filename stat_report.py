@@ -4,6 +4,7 @@ import os
 import re
 import csv
 from typing import List, Dict
+from datetime import datetime
 
 def parse_one_txt(txt_path: str) -> List[Dict]:
     """
@@ -63,9 +64,13 @@ def parse_one_txt(txt_path: str) -> List[Dict]:
 def scan_all_business_reports(root_data_dir: str):
     """
     遍历所有业务的reports目录，批量解析、统计、输出报告
+    输出：业务+分组明细 + 业务合计 + 全局合计
     """
     all_records = []
     business_list = [d for d in os.scandir(root_data_dir) if d.is_dir()]
+
+    biz_total_stat = {}    # 业务整体汇总
+    biz_group_stat = []    # 每个txt分组明细列表
 
     for biz_dir_entry in business_list:
         biz_name = biz_dir_entry.name
@@ -81,11 +86,11 @@ def scan_all_business_reports(root_data_dir: str):
 
         for fname in os.listdir(reports_dir):
             if fname.lower().endswith(".txt"):
+                group_name = os.path.splitext(fname)[0]
                 full_txt = os.path.join(reports_dir, fname)
                 items = parse_one_txt(full_txt)
                 all_records.extend(items)
 
-                # 单文件统计
                 file_total = len(items)
                 file_normal = sum(1 for x in items if x["label"] == "normal")
                 file_abnormal = sum(1 for x in items if x["label"] == "abnormal")
@@ -96,14 +101,34 @@ def scan_all_business_reports(root_data_dir: str):
                 biz_abnormal += file_abnormal
                 biz_unknown += file_unknown
 
+                if file_total > 0:
+                    biz_group_stat.append({
+                        "biz_name": biz_name,
+                        "group_name": group_name,
+                        "total": file_total,
+                        "normal": file_normal,
+                        "abnormal": file_abnormal,
+                        "unknown": file_unknown,
+                        "rate_normal": file_normal / file_total * 100,
+                        "rate_abnormal": file_abnormal / file_total * 100,
+                        "rate_unknown": file_unknown / file_total * 100,
+                    })
                 print(f"   ✅ {fname} → 总数:{file_total} 正常:{file_normal} 异常:{file_abnormal} 未知:{file_unknown}")
 
-        # 保存单业务统计
         if biz_total > 0:
             biz_ratio_ab = biz_abnormal / biz_total * 100
             biz_ratio_no = biz_normal / biz_total * 100
             biz_ratio_uk = biz_unknown / biz_total * 100
-            print(f"   📊 【{biz_name}汇总】 总{biz_total} | 正常{biz_normal} | 异常{biz_abnormal} | 未知{biz_unknown}")
+            biz_total_stat[biz_name] = {
+                "total": biz_total,
+                "normal": biz_normal,
+                "abnormal": biz_abnormal,
+                "unknown": biz_unknown,
+                "rate_normal": biz_ratio_no,
+                "rate_abnormal": biz_ratio_ab,
+                "rate_unknown": biz_ratio_uk,
+            }
+            print(f"   📊【{biz_name}业务汇总】总{biz_total} | 正常{biz_normal} | 异常{biz_abnormal} | 未知{biz_unknown}")
 
     # ====================== 全局总统计 ======================
     total = len(all_records)
@@ -124,7 +149,7 @@ def scan_all_business_reports(root_data_dir: str):
         writer.writeheader()
         writer.writerows(all_records)
 
-    # ====================== 输出BadCase未知样本清单 ======================
+    # ====================== BadCase未知样本清单 ======================
     unknown_list = [r for r in all_records if r["label"] == "unknown"]
     badcase_path = os.path.join(root_data_dir, "unknown_badcase清单.txt")
     with open(badcase_path, "w", encoding="utf-8") as f:
@@ -136,11 +161,49 @@ def scan_all_business_reports(root_data_dir: str):
             f.write(f"   内容:{item['answer_snippet']}\n")
             f.write("-" * 80 + "\n")
 
-    # ====================== 美化版总统计报告 ======================
+    # ====================== 构建【业务+分组明细】文本块 ======================
+    block_lines = []
+    block_lines.append("【各业务&分组明细统计】")
+    block_lines.append("-" * 128)
+    block_lines.append(
+        f"{'业务名称':<14}{'分组名':<16}{'总样本':<8}{'正常':<8}{'异常':<8}{'未知':<8}"
+        f"{'正常占比':<12}{'异常占比':<12}{'未知占比':<12}"
+    )
+    block_lines.append("-" * 128)
+
+    # 按业务分组输出明细，同一业务输出完所有分组，再输出业务合计行
+    last_biz = None
+    for item in biz_group_stat:
+        current_biz = item["biz_name"]
+        if last_biz is not None and last_biz != current_biz:
+            # 输出上一个业务的合计行
+            s = biz_total_stat[last_biz]
+            block_lines.append(
+                f"【{last_biz}合计】{'':<8}{s['total']:<8}{s['normal']:<8}{s['abnormal']:<8}{s['unknown']:<8}"
+                f"{s['rate_normal']:.2f}%{'':<6}{s['rate_abnormal']:.2f}%{'':<6}{s['rate_unknown']:.2f}%"
+            )
+        block_lines.append(
+            f"{item['biz_name']:<14}{item['group_name']:<16}{item['total']:<8}{item['normal']:<8}{item['abnormal']:<8}{item['unknown']:<8}"
+            f"{item['rate_normal']:.2f}%{'':<6}{item['rate_abnormal']:.2f}%{'':<6}{item['rate_unknown']:.2f}%"
+        )
+        last_biz = current_biz
+    # 输出最后一个业务合计
+    if last_biz is not None:
+        s = biz_total_stat[last_biz]
+        block_lines.append(
+            f"【{last_biz}合计】{'':<8}{s['total']:<8}{s['normal']:<8}{s['abnormal']:<8}{s['unknown']:<8}"
+            f"{s['rate_normal']:.2f}%{'':<6}{s['rate_abnormal']:.2f}%{'':<6}{s['rate_unknown']:.2f}%"
+        )
+    block_lines.append("-" * 128)
+    biz_detail_block = "\n".join(block_lines)
+
+    # ====================== 构建总报告文本 ======================
     stat_text = f"""
 # ============================== AI检测结果统计报告 ==============================
-# 生成时间：{os.popen('time /t').read().strip()}
+# 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 # 数据根目录：{root_data_dir}
+
+{biz_detail_block}
 
 【全局总体统计】
 ------------------------------------------------------------------------------
@@ -165,18 +228,17 @@ def scan_all_business_reports(root_data_dir: str):
     with open(stat_path, "w", encoding="utf-8") as f:
         f.write(stat_text)
 
-    # 控制台最终输出
-    print("\n" + "="*80)
+    # 控制台输出
+    print("\n" + "="*120)
     print("📊 【全局最终统计结果】")
     print(f"✅ 总样本：{total} 张")
     print(f"🟢 正常：{normal_cnt} 张 ({normal_rate:.2f}%)")
     print(f"🔴 异常：{abnormal_cnt} 张 ({abnormal_rate:.2f}%)")
     print(f"⚫ 未知：{unknown_cnt} 张 ({unknown_rate:.2f}%)")
-    print("="*80)
+    print("="*120)
     print(f"📁 汇总报告：{stat_path}")
     print(f"📁 明细CSV：{csv_path}")
     print(f"📁 BadCase清单：{badcase_path}")
-
 
 if __name__ == "__main__":
     DATA_ROOT = r"D:\data\盈盾图片\盈盾"
