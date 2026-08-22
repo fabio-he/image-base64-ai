@@ -1,10 +1,10 @@
-
 from __future__ import annotations
 import os
 import re
 import csv
 from typing import List, Dict
 from datetime import datetime
+
 
 def parse_one_txt(txt_path: str) -> List[Dict]:
     """
@@ -61,16 +61,56 @@ def parse_one_txt(txt_path: str) -> List[Dict]:
     return records
 
 
+def parse_biz_cost_file(cost_txt_path: str) -> dict:
+    """读取单个业务 biz_cost_time.txt 耗时文件"""
+    cost_info = {
+        "biz_name": "",
+        "total_img": 0,
+        "biz_total_cost": 0.0,
+        "avg_per_img": 0.0,
+        "generate_time": ""
+    }
+    if not os.path.exists(cost_txt_path):
+        return cost_info
+
+    with open(cost_txt_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    for line in lines:
+        line = line.strip()
+        if line.startswith("业务名称："):
+            cost_info["biz_name"] = line.split("：")[-1]
+        elif line.startswith("统计生成时间："):
+            cost_info["generate_time"] = line.split("：")[-1]
+        elif line.startswith("业务总图片数量："):
+            try:
+                cost_info["total_img"] = int(line.split("：")[-1].replace("张", "").strip())
+            except:
+                pass
+        elif line.startswith("业务整体执行耗时："):
+            try:
+                cost_info["biz_total_cost"] = float(line.split("：")[-1].replace("秒", "").strip())
+            except:
+                pass
+        elif line.startswith("单张图片平均耗时："):
+            try:
+                cost_info["avg_per_img"] = float(line.split("：")[-1].replace("秒", "").strip())
+            except:
+                pass
+    return cost_info
+
+
 def scan_all_business_reports(root_data_dir: str):
     """
     遍历所有业务的reports目录，批量解析、统计、输出报告
-    输出：业务+分组明细 + 业务合计 + 全局合计
+    输出：业务+分组明细 + 业务合计 + 全局合计 + 业务耗时统计
     """
     all_records = []
     business_list = [d for d in os.scandir(root_data_dir) if d.is_dir()]
 
     biz_total_stat = {}    # 业务整体汇总
     biz_group_stat = []    # 每个txt分组明细列表
+    biz_cost_list = []     # 全部业务耗时集合
 
     for biz_dir_entry in business_list:
         biz_name = biz_dir_entry.name
@@ -84,8 +124,17 @@ def scan_all_business_reports(root_data_dir: str):
         biz_abnormal = 0
         biz_unknown = 0
 
+        # 读取业务耗时文件
+        cost_file = os.path.join(reports_dir, "biz_cost_time.txt")
+        cost_data = parse_biz_cost_file(cost_file)
+        biz_cost_list.append(cost_data)
+        if cost_data["biz_total_cost"] > 0:
+            print(f"   ⏱ 业务耗时读取成功：总耗时 {cost_data['biz_total_cost']}s，单图平均 {cost_data['avg_per_img']}s")
+        else:
+            print(f"   ⚠ 未找到业务耗时记录 biz_cost_time.txt")
+
         for fname in os.listdir(reports_dir):
-            if fname.lower().endswith(".txt"):
+            if fname.lower().endswith(".txt") and fname != "biz_cost_time.txt":
                 group_name = os.path.splitext(fname)[0]
                 full_txt = os.path.join(reports_dir, fname)
                 items = parse_one_txt(full_txt)
@@ -140,6 +189,22 @@ def scan_all_business_reports(root_data_dir: str):
     normal_rate = normal_cnt / total * 100 if total else 0
     unknown_rate = unknown_cnt / total * 100 if total else 0
 
+    # ======================输出业务耗时汇总CSV======================
+    biz_cost_csv_path = os.path.join(root_data_dir, "biz_cost_summary.csv")
+    with open(biz_cost_csv_path, "w", encoding="utf-8-sig", newline="") as fw:
+        writer = csv.DictWriter(fw, fieldnames=[
+            "业务名称", "图片总数量", "业务整体耗时(秒)", "单张平均耗时(秒)", "耗时统计时间"
+        ])
+        writer.writeheader()
+        for item in biz_cost_list:
+            writer.writerow({
+                "业务名称": item["biz_name"],
+                "图片总数量": item["total_img"],
+                "业务整体耗时(秒)": item["biz_total_cost"],
+                "单张平均耗时(秒)": item["avg_per_img"],
+                "耗时统计时间": item["generate_time"]
+            })
+
     # ====================== 输出CSV明细 ======================
     csv_path = os.path.join(root_data_dir, "stat_summary_detail.csv")
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as fw:
@@ -160,6 +225,21 @@ def scan_all_business_reports(root_data_dir: str):
             f.write(f"   图片:{item['img_path']}\n")
             f.write(f"   内容:{item['answer_snippet']}\n")
             f.write("-" * 80 + "\n")
+
+    # ====================== 构建【业务耗时统计文本块】 ======================
+    cost_block_lines = []
+    cost_block_lines.append("【各业务执行耗时统计】")
+    cost_block_lines.append("-" * 90)
+    cost_block_lines.append(
+        f"{'业务名称':<16}{'图片总数':<10}{'业务总耗时(秒)':<16}{'单张平均耗时(秒)':<18}{'统计时间':<26}"
+    )
+    cost_block_lines.append("-" * 90)
+    for c in biz_cost_list:
+        cost_block_lines.append(
+            f"{c['biz_name']:<16}{c['total_img']:<10}{c['biz_total_cost']:<16.2f}{c['avg_per_img']:<18.2f}{c['generate_time']}"
+        )
+    cost_block_lines.append("-" * 90)
+    cost_block_text = "\n".join(cost_block_lines)
 
     # ====================== 构建【业务+分组明细】文本块 ======================
     block_lines = []
@@ -203,6 +283,8 @@ def scan_all_business_reports(root_data_dir: str):
 # 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 # 数据根目录：{root_data_dir}
 
+{cost_block_text}
+
 {biz_detail_block}
 
 【全局总体统计】
@@ -220,6 +302,7 @@ def scan_all_business_reports(root_data_dir: str):
 
 【输出文件清单】
 - 详细数据报表    : stat_summary_detail.csv
+- 业务耗时汇总表  : biz_cost_summary.csv
 - 未知样本复核清单 : unknown_badcase清单.txt
 ==============================================================================
 """
@@ -238,7 +321,9 @@ def scan_all_business_reports(root_data_dir: str):
     print("="*120)
     print(f"📁 汇总报告：{stat_path}")
     print(f"📁 明细CSV：{csv_path}")
+    print(f"📁 业务耗时汇总CSV：{biz_cost_csv_path}")
     print(f"📁 BadCase清单：{badcase_path}")
+
 
 if __name__ == "__main__":
     DATA_ROOT = r"D:\data\盈盾图片\盈盾"

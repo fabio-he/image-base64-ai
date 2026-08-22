@@ -1,49 +1,72 @@
-from __future__ import annotations
+"""
+run_all_and_stat.py
+一键执行完整流水线：
+1. 执行AI图片推理 main.py
+2. 执行stat_report 通用统计报告
+3. 执行business_accuracy_report 业务准确率报告
+4. 执行summary_metrics 核心指标(TP/TN/FP/FN/准确率/召回率)报告
+"""
+import subprocess
 import sys
 import os
-import argparse
+from datetime import datetime
 
-CUR_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, CUR_DIR)
+# ===================== 配置区 =====================
+# 虚拟环境python解释器路径，改成你本地venv下python.exe
+PYTHON_EXE = r"D:\imagebase64\image-base64-ai\.venv\Scripts\python.exe"
+# 项目工作目录，所有py文件在此目录
+WORK_DIR = r"D:\imagebase64\image-base64-ai"
+# =================================================
+
+def run_script(script_name: str):
+    """执行单个py脚本，打印日志，异常抛出"""
+    print("\n" + "=" * 80)
+    print(f"🚀 开始执行脚本：{script_name} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 80)
+
+    script_path = os.path.join(WORK_DIR, script_name)
+    if not os.path.exists(script_path):
+        raise FileNotFoundError(f"脚本不存在：{script_path}，请确认文件放在项目目录")
+
+    proc = subprocess.Popen(
+        [PYTHON_EXE, script_path],
+        cwd=WORK_DIR,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+    )
+    ret_code = proc.wait()
+    if ret_code != 0:
+        raise RuntimeError(f"❌脚本 {script_name} 执行失败，返回码={ret_code}")
+    print(f"✅ {script_name} 执行完成\n")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="一键执行AI推理+统计脚本")
-    parser.add_argument("--mode", choices=["all", "single"], default="all",
-                        help="运行模式：all=全部业务，single=单个业务")
-    parser.add_argument("--biz", type=str, default="小包垃圾",
-                        help="单业务模式下指定业务名称，mode=single时生效")
-    parser.add_argument("--root", type=str, default=r"D:\data\盈盾图片\盈盾",
-                        help="数据集总根目录")
+    print("######################## 全流程一键流水线启动 ########################")
+    print(f"执行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"解释器路径：{PYTHON_EXE}")
+    print(f"工作目录：{WORK_DIR}")
 
-    args = parser.parse_args()
+    try:
+        # 步骤1：AI推理主程序 main.py
+        run_script("main.py")
 
-    print("=" * 75)
-    print("🚀 一键执行：AI图片推理 + 结果统计")
-    print(f"👉运行模式: {args.mode}")
-    if args.mode == "single":
-        print(f"👉指定执行业务: {args.biz}")
-    print(f"👉数据集根目录: {args.root}")
-    print("=" * 75)
+        # 步骤2：stat_report 通用统计
+        run_script("stat_report.py")
 
-    # 动态修改config模块变量（内存中生效，不修改磁盘文件）
-    import config
-    config.RUN_ALL_BUSINESS = (args.mode == "single")
-    config.ACTIVE_BUSINESS = args.biz
+        # 步骤3：业务准确率报告
+        run_script("business_accuracy_report.py")
 
-    # 步骤1：执行推理
-    print("\n===== 步骤1：启动AI推理任务 =====")
-    import main
-    main.main()
+        # 步骤4：核心指标 TP/TN/FP/FN 汇总报告
+        run_script("summary_metrics.py")
 
-    # 步骤2：统计报告
-    print("\n\n===== 步骤2：解析全部reports生成统计汇总 =====")
-    import stat_report
-    stat_report.scan_all_business_reports(args.root)
+        print("\n########################################################")
+        print("🎉🎉🎉 全部流程执行完毕！")
+        print("输出报告全部生成在业务根目录 D:\\data\\盈盾图片\\盈盾")
+        print("########################################################\n")
 
-    print("\n✅✅✅ 全部流程执行完成！")
-    print(f"输出文件路径：{os.path.join(args.root, 'stat_summary.csv')}")
-    print(f"输出文件路径：{os.path.join(args.root, 'stat_summary.txt')}")
+    except Exception as e:
+        print(f"\n💥流水线异常终止：{e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

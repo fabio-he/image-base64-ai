@@ -272,6 +272,7 @@ task_id：{task_id}
 
 def run_business(biz_name: str, biz_cfg: dict):
     """执行单个业务"""
+    biz_start_time = time.time() # 业务整体开始计时
     biz_root = biz_cfg["root_folder"]
     biz_question = biz_cfg["question"]
     biz_assert_key = biz_cfg["assert_keyword"]
@@ -293,8 +294,10 @@ def run_business(biz_name: str, biz_cfg: dict):
 
     image_groups = scan_image_groups(business_dir=biz_root, biz_name=biz_name)
 
+    total_img_count = 0
     for g_name, imgs in image_groups.items():
         print(f"  {g_name:<20}: {len(imgs)} 张")
+        total_img_count += len(imgs)
 
     # 依次处理3个分组
     handle_one_group(
@@ -327,6 +330,35 @@ def run_business(biz_name: str, biz_cfg: dict):
         question_text=biz_question,
         assert_keyword=biz_assert_key
     )
+
+    # =========业务执行完毕，计算耗时=========
+    biz_total_cost = round(time.time() - biz_start_time,2)
+    if total_img_count > 0:
+        avg_per_img = round(biz_total_cost / total_img_count,2)
+    else:
+        avg_per_img = 0.0
+
+    #控制台输出业务耗时统计
+    print("\n" + "="*60)
+    print(f"📊业务【{biz_name}】耗时统计")
+    print(f"业务总图片数量：{total_img_count} 张")
+    print(f"业务整体执行耗时：{biz_total_cost} 秒")
+    print(f"单张图片平均耗时：{avg_per_img} 秒")
+    print("="*60)
+
+    #写入业务耗时文件 reports/biz_cost_time.txt
+    cost_file_path = os.path.join(reports_dir,"biz_cost_time.txt")
+    cost_content = f"""# 业务耗时统计
+业务名称：{biz_name}
+统计生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+业务总图片数量：{total_img_count} 张
+业务整体执行耗时：{biz_total_cost} 秒
+单张图片平均耗时：{avg_per_img} 秒
+"""
+    with open(cost_file_path,"w",encoding="utf-8") as f:
+        f.write(cost_content)
+
+    print(f"📄业务耗时文件已输出 → {cost_file_path}")
     print(f"<<<<<<<<<<<<<<<<<<<<业务【{biz_name}】执行完成\n")
 
 

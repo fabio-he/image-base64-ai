@@ -1,11 +1,10 @@
 # 图像AI批量检测自动化测试工具
 ## 项目概述
 ### 1.项目背景<br>
-本工具用于批量本地图片数据集调用图像分析API接口完成自动化检测。<br>
-适用于工地安全、城市不文明现象识别场景，支持多业务场景管理，区分正样本dim、负样本neg数据集；<br>
-完成图片base64编码、任务提交、任务排队(queued)/处理中(processing)轮询等待、结果断言、报告输出；<br>
-支持执行完成后自动解析原始报告，统计**异常样本、正常样本**数量，输出明细CSV文件用于数据分析。<br>
-
+本工具用于批量本地图片数据集调用图像分析 API 接口完成自动化检测。
+适用于工地安全、城市不文明现象识别场景，支持多业务场景管理，区分正样本 dim、负样本 neg 数据集；
+完成图片 base64 编码、任务提交、任务排队 (queued)/ 处理中 (processing) 轮询等待、结果断言、报告输出；
+支持执行完成后自动解析原始报告，统计**异常样本、正常样本数量**，输出明细 CSV 文件用于数据分析。<br>
 ### 2.主要能力清单<br>
 ✅ 批量读取本地图片，自动转换为`data:image/*;base64,xxx`标准格式<br>
 ✅ API任务提交，网络异常自动重试<br>
@@ -27,14 +26,18 @@
 - re / csv：报告二次解析、数据统计导出<br>
 
 ## 目录结构说明<br>
+
 image-base64-ai/<br>
 ├─ config.py # 全局配置、业务池、鉴权、超时、轮询参数<br>
 ├─ main.py # 主运行入口，批量遍历图片、提交 API 任务<br>
 ├─ report_render.py # HTML 报告渲染模块（Jinja2）<br>
-├─ stat_report.py # 普通统计脚本：解析 reports 下 txt，输出业务 + 分组统计报告<br>
-├─ calc_accuracy.py # 业务真值准确率脚本：计算符合业务预期的准确率<br>
+├─ stat_report.py # 通用统计脚本：解析 reports 下 txt，输出业务 + 分组统计报告<br>
+├─ business_accuracy_report.py # 业务真值准确率脚本：计算符合业务预期的准确率<br>
+├─ summary_metrics.py # 核心指标脚本：输出 TP/TN/FP/FN、准确率、召回率<br>
+├─ extract_badcase.py # BadCase 提取脚本：复制错误 / 未知样本到独立目录<br>
+├─ run_all_and_stat.py # 一键流水线入口：推理 + 全量统计 + BadCase 提取一体化执行<br>
 ├─ requirements.txt # 第三方依赖清单<br>
-└─ README.md<br>
+└─ README.md # 项目说明文档<br>
 
 ### 数据集磁盘目录规范（非常重要）<br>
 > 数据集总根目录示例：`D:\data\盈盾图片\盈盾`<br>
